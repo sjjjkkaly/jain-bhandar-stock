@@ -16,8 +16,8 @@ import {
   clearSupabaseConfig,
   SUPABASE_SQL_SETUP,
   fetchSupabaseItems,
-  syncItemToSupabase,
-  syncTransactionToSupabase
+  saveItemToSupabase,
+  saveTransactionsToSupabase
 } from '@/lib/supabase';
 import { Item, Transaction } from '@/types/stock';
 
@@ -66,12 +66,12 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({
     setIsError(false);
 
     const test = await fetchSupabaseItems();
-    if (test !== null) {
-      setStatus('Connected successfully to Supabase!');
+    if (!test.error) {
+      setStatus(`Connected successfully to Supabase! Loaded ${test.items.length} items.`);
       setIsError(false);
       onSynced();
     } else {
-      setStatus('Could not connect. Please check URL, Key, or run SQL setup below.');
+      setStatus(`Could not connect: ${test.error}. Please verify the URL/Key or run the SQL query below.`);
       setIsError(true);
     }
   };
@@ -80,7 +80,7 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({
     clearSupabaseConfig();
     setUrl('');
     setAnonKey('');
-    setStatus('Disconnected from Supabase. Working locally.');
+    setStatus('Disconnected from Supabase.');
     setIsError(false);
     onSynced();
   };
@@ -92,14 +92,14 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({
 
     let syncedItems = 0;
     for (const it of items) {
-      const ok = await syncItemToSupabase(it);
-      if (ok) syncedItems++;
+      const ok = await saveItemToSupabase(it);
+      if (ok.success) syncedItems++;
     }
 
     let syncedTx = 0;
     for (const tx of transactions) {
-      const ok = await syncTransactionToSupabase(tx);
-      if (ok) syncedTx++;
+      const ok = await saveTransactionsToSupabase([tx]);
+      if (ok.success) syncedTx++;
     }
 
     setIsSyncing(false);

@@ -2,15 +2,7 @@
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { Item, Transaction } from '@/types/stock';
-import { 
-  checkAuth, 
-  setAuth, 
-  getItems, 
-  saveItems, 
-  getTransactions, 
-  saveTransactions, 
-  calculateDayStock 
-} from '@/lib/storage';
+import { checkAuth, setAuth, calculateDayStock } from '@/lib/storage';
 import { printStockPDF } from '@/lib/pdfExport';
 import { 
   getSupabaseConfig, 
@@ -28,7 +20,7 @@ import { BulkEntryModal } from '@/components/BulkEntryModal';
 import { ItemModal } from '@/components/ItemModal';
 import { ManageItemsModal } from '@/components/ManageItemsModal';
 import { SupabaseModal } from '@/components/SupabaseModal';
-import { Plus, Minus, Printer, Edit2, Search, Trash2, Package } from 'lucide-react';
+import { Plus, Minus, Printer, Edit2, Search, Trash2, Package, AlertTriangle, RefreshCw } from 'lucide-react';
 
 export default function HomePage() {
   const [isAuthed, setIsAuthed] = useState<boolean>(false);
@@ -40,6 +32,8 @@ export default function HomePage() {
     new Date().toISOString().split('T')[0]
   );
   const [search, setSearch] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   // Modals
   const [isBulkOpen, setIsBulkOpen] = useState(false);
@@ -52,27 +46,32 @@ export default function HomePage() {
   const [isSupabaseOpen, setIsSupabaseOpen] = useState(false);
   const [hasSupabase, setHasSupabase] = useState(false);
 
-  // Load latest data from Supabase (or localStorage fallback)
+  // Load latest data directly from Supabase (NO BROWSER STORAGE)
   const loadAllData = useCallback(async () => {
     const cfg = getSupabaseConfig();
-    if (cfg) {
-      setHasSupabase(true);
-      const [cloudItems, cloudTx] = await Promise.all([
-        fetchSupabaseItems(),
-        fetchSupabaseTransactions(),
-      ]);
-      if (cloudItems !== null && cloudTx !== null) {
-        setItems(cloudItems);
-        setTransactions(cloudTx);
-        saveItems(cloudItems);
-        saveTransactions(cloudTx);
-        return;
-      }
-    } else {
+    if (!cfg) {
       setHasSupabase(false);
+      return;
     }
-    setItems(getItems());
-    setTransactions(getTransactions());
+    setHasSupabase(true);
+
+    const [itemsRes, txRes] = await Promise.all([
+      fetchSupabaseItems(),
+      fetchSupabaseTransactions(),
+    ]);
+
+    if (itemsRes.error) {
+      setErrorMessage(`Supabase error: ${itemsRes.error}`);
+    } else {
+      setItems(itemsRes.items);
+      setErrorMessage(null);
+    }
+
+    if (txRes.error) {
+      console.error('Transactions load error:', txRes.error);
+    } else {
+      setTransactions(txRes.transactions);
+    }
   }, []);
 
   // Initial load
@@ -82,14 +81,23 @@ export default function HomePage() {
     loadAllData();
   }, [loadAllData]);
 
-  // Realtime Live Subscription: Auto-update when another staff/admin saves stock
+  // Realtime Live Subscription + Auto-polling every 3 seconds for instant sync
   useEffect(() => {
     if (!hasSupabase) return;
+
+    // 1. Supabase WebSockets Realtime
     const channel = subscribeToStockChanges(() => {
       loadAllData();
     });
+
+    // 2. Continuous 3-second auto-poll (ensures mobile browsers never miss updates)
+    const interval = setInterval(() => {
+      loadAllData();
+    }, 3000);
+
     return () => {
       channel?.unsubscribe();
+      clearInterval(interval);
     };
   }, [hasSupabase, loadAllData]);
 
@@ -111,8 +119,15 @@ export default function HomePage() {
     );
   }, [stockRows, search]);
 
-  // Bulk Purchase / Sale save
+  // Bulk Purchase / Sale save directly to Supabase
   const handleSaveBulk = async (entries: { itemId: string; quantity: number }[]) => {
+    if (!hasSupabase) {
+      alert('Please connect Supabase first so this transaction is saved to the cloud!');
+      setIsSupabaseOpen(true);
+      return;
+    }
+
+    setIsLoading(true);
     const newTxs: Transaction[] = entries.map((e) => ({
       id: `tx-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       date: selectedDate,
@@ -121,23 +136,32 @@ export default function HomePage() {
       quantity: e.quantity,
     }));
 
-    const updated = [...transactions, ...newTxs];
-    setTransactions(updated);
-    saveTransactions(updated);
+    const res = await saveTransactionsToSupabase(newTxs);
+    setIsLoading(false);
 
-    // Save to Supabase (so all staff devices update immediately)
-    if (hasSupabase) {
-      await saveTransactionsToSupabase(newTxs);
+    if (!res.success) {
+      alert(`Failed to save to Supabase: ${res.error || 'Unknown error'}`);
+      return;
     }
+
+    // Refresh immediately from Supabase
+    await loadAllData();
   };
 
-  // Quick 1-item inline adjustment
+  // Quick 1-item inline adjustment directly to Supabase
   const handleQuickInline = async (itemId: string, type: 'PURCHASE' | 'SALE') => {
+    if (!hasSupabase) {
+      alert('Please connect Supabase first so this transaction is saved to the cloud!');
+      setIsSupabaseOpen(true);
+      return;
+    }
+
     const input = prompt(`Enter ${type === 'PURCHASE' ? 'Purchase (+)' : 'Sale (-)'} quantity:`);
     if (!input) return;
     const qty = parseInt(input.trim());
     if (isNaN(qty) || qty <= 0) return;
 
+    setIsLoading(true);
     const newTx: Transaction = {
       id: `tx-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       date: selectedDate,
@@ -146,43 +170,49 @@ export default function HomePage() {
       quantity: qty,
     };
 
-    const updated = [...transactions, newTx];
-    setTransactions(updated);
-    saveTransactions(updated);
+    const res = await saveTransactionsToSupabase([newTx]);
+    setIsLoading(false);
 
-    if (hasSupabase) {
-      await saveTransactionsToSupabase([newTx]);
+    if (!res.success) {
+      alert(`Failed to save to Supabase: ${res.error || 'Unknown error'}`);
+      return;
     }
+
+    // Refresh immediately from Supabase
+    await loadAllData();
   };
 
-  // Item Save & Delete (Add / Edit / Delete)
+  // Item Save & Delete directly to Supabase
   const handleSaveItem = async (saved: Item) => {
-    const exists = items.some((i) => i.id === saved.id);
-    let updated: Item[];
-    if (exists) {
-      updated = items.map((i) => (i.id === saved.id ? saved : i));
-    } else {
-      updated = [...items, saved];
+    if (!hasSupabase) {
+      alert('Please connect Supabase first so this item is saved to the cloud!');
+      setIsSupabaseOpen(true);
+      return;
     }
-    setItems(updated);
-    saveItems(updated);
 
-    if (hasSupabase) {
-      await saveItemToSupabase(saved);
+    setIsLoading(true);
+    const res = await saveItemToSupabase(saved);
+    setIsLoading(false);
+
+    if (!res.success) {
+      alert(`Failed to save item: ${res.error}`);
+      return;
     }
+    await loadAllData();
   };
 
   const handleDeleteItem = async (itemId: string) => {
-    const updatedItems = items.filter((i) => i.id !== itemId);
-    const updatedTx = transactions.filter((t) => t.itemId !== itemId);
-    setItems(updatedItems);
-    setTransactions(updatedTx);
-    saveItems(updatedItems);
-    saveTransactions(updatedTx);
+    if (!hasSupabase) return;
 
-    if (hasSupabase) {
-      await deleteItemFromSupabase(itemId);
+    setIsLoading(true);
+    const res = await deleteItemFromSupabase(itemId);
+    setIsLoading(false);
+
+    if (!res.success) {
+      alert(`Failed to delete item: ${res.error}`);
+      return;
     }
+    await loadAllData();
   };
 
   // Print PDF
@@ -223,6 +253,36 @@ export default function HomePage() {
         isSupabaseConnected={hasSupabase}
       />
 
+      {/* Cloud Disconnected Warning Banner if not linked on this device */}
+      {!hasSupabase && (
+        <div className="bg-amber-500 text-white px-4 py-2 text-xs font-bold text-center flex items-center justify-center gap-2 shadow-sm">
+          <AlertTriangle className="w-4 h-4 shrink-0" />
+          <span>
+            Supabase is not connected on this device yet!
+          </span>
+          <button
+            onClick={() => setIsSupabaseOpen(true)}
+            className="underline bg-amber-600 hover:bg-amber-700 px-2.5 py-0.5 rounded text-white ml-1 font-bold"
+          >
+            Connect Supabase Now
+          </button>
+        </div>
+      )}
+
+      {/* Error Message Banner */}
+      {errorMessage && (
+        <div className="bg-red-50 border-b border-red-200 text-red-700 px-4 py-2 text-xs font-semibold text-center flex items-center justify-center gap-2">
+          <AlertTriangle className="w-4 h-4 shrink-0" />
+          <span>{errorMessage}</span>
+          <button
+            onClick={loadAllData}
+            className="underline ml-2 font-bold"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
       <main className="max-w-6xl mx-auto px-4 py-5">
         
         {/* Simple Date Selector */}
@@ -237,9 +297,19 @@ export default function HomePage() {
             <span className="font-bold text-gray-700 uppercase tracking-wide">
               Stock Calculation:
             </span>
-            <span className="font-mono bg-gray-100 text-gray-800 px-2.5 py-1 rounded-md font-semibold">
-              Opening Stock + Purchase - Sales = Current/Closing Stock
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="font-mono bg-gray-100 text-gray-800 px-2.5 py-1 rounded-md font-semibold">
+                Opening Stock + Purchase - Sales = Current/Closing Stock
+              </span>
+              <button
+                onClick={loadAllData}
+                disabled={isLoading}
+                title="Refresh from Supabase"
+                className="p-1 rounded hover:bg-gray-100 text-gray-500 transition"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin text-green-600' : ''}`} />
+              </button>
+            </div>
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
@@ -351,100 +421,110 @@ export default function HomePage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {filteredRows.map((r, idx) => (
-                  <tr key={r.itemId} className="hover:bg-gray-50/80 transition">
-                    <td className="py-2.5 px-3 text-center text-gray-400 font-medium">
-                      {idx + 1}
-                    </td>
-                    <td className="py-2.5 px-3 font-bold text-gray-900">
-                      {r.name}
-                    </td>
-                    <td className="py-2.5 px-3 font-medium text-gray-700">
-                      {r.brand}
-                    </td>
-                    <td className="py-2.5 px-3 text-center text-gray-500 font-medium">
-                      {r.unit}
-                    </td>
-                    <td className="py-2.5 px-3 text-right text-gray-700 font-semibold">
-                      {r.openingStock}
-                    </td>
-                    <td className="py-2.5 px-3 text-right text-green-700 font-bold">
-                      {r.purchase > 0 ? `+${r.purchase}` : '-'}
-                    </td>
-                    <td className="py-2.5 px-3 text-right text-red-600 font-bold">
-                      {r.sales > 0 ? `-${r.sales}` : '-'}
-                    </td>
-                    <td className="py-2.5 px-3 text-right font-black text-sm bg-green-50/40 text-gray-900">
-                      {r.closingStock} <span className="text-[10px] text-gray-500 font-normal">{r.unit}</span>
-                    </td>
-                    <td className="py-2.5 px-3 text-center">
-                      <div className="flex items-center justify-center gap-1">
-                        {/* Quick + Purchase */}
-                        <button
-                          onClick={() => handleQuickInline(r.itemId, 'PURCHASE')}
-                          title="Add Purchase (+)"
-                          className="w-6 h-6 rounded bg-green-50 hover:bg-green-100 text-green-700 flex items-center justify-center font-bold border border-green-200"
-                        >
-                          +
-                        </button>
-
-                        {/* Quick - Sale */}
-                        <button
-                          onClick={() => handleQuickInline(r.itemId, 'SALE')}
-                          title="Deduct Sale (-)"
-                          className="w-6 h-6 rounded bg-red-50 hover:bg-red-100 text-red-600 flex items-center justify-center font-bold border border-red-200"
-                        >
-                          -
-                        </button>
-
-                        {/* Edit Item Details */}
-                        <button
-                          onClick={() => {
-                            const it = items.find((i) => i.id === r.itemId);
-                            if (it) {
-                              setEditingItem(it);
-                              setIsItemModalOpen(true);
-                            }
-                          }}
-                          title="Edit Item Details"
-                          className="px-1.5 py-0.5 rounded bg-gray-100 hover:bg-gray-200 text-gray-600 text-[11px] font-semibold flex items-center gap-0.5 transition"
-                        >
-                          <Edit2 className="w-3 h-3" />
-                          <span>Edit</span>
-                        </button>
-
-                        {/* Delete Item */}
-                        <button
-                          onClick={() => {
-                            const it = items.find((i) => i.id === r.itemId);
-                            if (it && confirm(`Delete "${it.name} (${it.brand})"?`)) {
-                              handleDeleteItem(it.id);
-                            }
-                          }}
-                          title="Delete Item"
-                          className="w-6 h-6 rounded hover:bg-red-50 text-red-400 hover:text-red-600 flex items-center justify-center transition"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                        </button>
-                      </div>
+                {filteredRows.length === 0 ? (
+                  <tr>
+                    <td colSpan={9} className="py-12 text-center text-gray-400">
+                      {hasSupabase ? 'No items in database. Click "+ Add Item" above to create an item.' : 'Please connect Supabase to view and manage stock.'}
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  filteredRows.map((r, idx) => (
+                    <tr key={r.itemId} className="hover:bg-gray-50/80 transition">
+                      <td className="py-2.5 px-3 text-center text-gray-400 font-medium">
+                        {idx + 1}
+                      </td>
+                      <td className="py-2.5 px-3 font-bold text-gray-900">
+                        {r.name}
+                      </td>
+                      <td className="py-2.5 px-3 font-medium text-gray-700">
+                        {r.brand}
+                      </td>
+                      <td className="py-2.5 px-3 text-center text-gray-500 font-medium">
+                        {r.unit}
+                      </td>
+                      <td className="py-2.5 px-3 text-right text-gray-700 font-semibold">
+                        {r.openingStock}
+                      </td>
+                      <td className="py-2.5 px-3 text-right text-green-700 font-bold">
+                        {r.purchase > 0 ? `+${r.purchase}` : '-'}
+                      </td>
+                      <td className="py-2.5 px-3 text-right text-red-600 font-bold">
+                        {r.sales > 0 ? `-${r.sales}` : '-'}
+                      </td>
+                      <td className="py-2.5 px-3 text-right font-black text-sm bg-green-50/40 text-gray-900">
+                        {r.closingStock} <span className="text-[10px] text-gray-500 font-normal">{r.unit}</span>
+                      </td>
+                      <td className="py-2.5 px-3 text-center">
+                        <div className="flex items-center justify-center gap-1">
+                          {/* Quick + Purchase */}
+                          <button
+                            onClick={() => handleQuickInline(r.itemId, 'PURCHASE')}
+                            title="Add Purchase (+)"
+                            className="w-6 h-6 rounded bg-green-50 hover:bg-green-100 text-green-700 flex items-center justify-center font-bold border border-green-200"
+                          >
+                            +
+                          </button>
+
+                          {/* Quick - Sale */}
+                          <button
+                            onClick={() => handleQuickInline(r.itemId, 'SALE')}
+                            title="Deduct Sale (-)"
+                            className="w-6 h-6 rounded bg-red-50 hover:bg-red-100 text-red-600 flex items-center justify-center font-bold border border-red-200"
+                          >
+                            -
+                          </button>
+
+                          {/* Edit Item Details */}
+                          <button
+                            onClick={() => {
+                              const it = items.find((i) => i.id === r.itemId);
+                              if (it) {
+                                setEditingItem(it);
+                                setIsItemModalOpen(true);
+                              }
+                            }}
+                            title="Edit Item Details"
+                            className="px-1.5 py-0.5 rounded bg-gray-100 hover:bg-gray-200 text-gray-600 text-[11px] font-semibold flex items-center gap-0.5 transition"
+                          >
+                            <Edit2 className="w-3 h-3" />
+                            <span>Edit</span>
+                          </button>
+
+                          {/* Delete Item */}
+                          <button
+                            onClick={() => {
+                              const it = items.find((i) => i.id === r.itemId);
+                              if (it && confirm(`Delete "${it.name} (${it.brand})"?`)) {
+                                handleDeleteItem(it.id);
+                              }
+                            }}
+                            title="Delete Item"
+                            className="w-6 h-6 rounded hover:bg-red-50 text-red-400 hover:text-red-600 flex items-center justify-center transition"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
-              <tfoot>
-                <tr className="bg-gray-100 font-bold border-t border-gray-200 text-gray-900">
-                  <td colSpan={4} className="py-2.5 px-3 text-right uppercase text-[11px]">
-                    Total:
-                  </td>
-                  <td className="py-2.5 px-3 text-right">{totalOpening}</td>
-                  <td className="py-2.5 px-3 text-right text-green-700">+{totalPurchase}</td>
-                  <td className="py-2.5 px-3 text-right text-red-600">-{totalSales}</td>
-                  <td className="py-2.5 px-3 text-right text-sm font-black bg-green-100/70 text-green-950">
-                    {totalClosing} Bags
-                  </td>
-                  <td></td>
-                </tr>
-              </tfoot>
+              {filteredRows.length > 0 && (
+                <tfoot>
+                  <tr className="bg-gray-100 font-bold border-t border-gray-200 text-gray-900">
+                    <td colSpan={4} className="py-2.5 px-3 text-right uppercase text-[11px]">
+                      Total:
+                    </td>
+                    <td className="py-2.5 px-3 text-right">{totalOpening}</td>
+                    <td className="py-2.5 px-3 text-right text-green-700">+{totalPurchase}</td>
+                    <td className="py-2.5 px-3 text-right text-red-600">-{totalSales}</td>
+                    <td className="py-2.5 px-3 text-right text-sm font-black bg-green-100/70 text-green-950">
+                      {totalClosing} Bags
+                    </td>
+                    <td></td>
+                  </tr>
+                </tfoot>
+              )}
             </table>
           </div>
         </div>
