@@ -1,267 +1,166 @@
-import { Item, Transaction, DailyItemSummary, OverallStockSummary } from '@/types/stock';
-import { INITIAL_ITEMS, INITIAL_TRANSACTIONS } from './initialData';
+import { Item, Transaction, DayStockRow } from '@/types/stock';
 
 const STORAGE_KEYS = {
-  ITEMS: 'jb_stock_items_v1',
-  TRANSACTIONS: 'jb_stock_transactions_v1',
-  AUTH: 'jb_stock_auth_session_v1',
-  LAST_ACTIVE: 'jb_stock_last_active_v1',
+  ITEMS: 'jb_simple_items_v2',
+  TRANSACTIONS: 'jb_simple_tx_v2',
+  AUTH: 'jb_auth_v2',
 };
 
 export const MASTER_PIN = '1326';
 
-// Check if running in browser
 const isClient = typeof window !== 'undefined';
 
-// --- AUTHENTICATION HELPERS ---
+export const INITIAL_ITEMS: Item[] = [
+  {
+    id: 'muri-shyam',
+    name: 'Muri',
+    brand: 'Shyam',
+    unit: 'Bags',
+    openingStock: 20,
+  },
+  {
+    id: 'muri-ganesh',
+    name: 'Muri',
+    brand: 'Ganesh',
+    unit: 'Bags',
+    openingStock: 50,
+  },
+  {
+    id: 'jeera-swastik',
+    name: 'Jeera',
+    brand: 'Swastik',
+    unit: 'Bags',
+    openingStock: 250,
+  },
+  {
+    id: 'jeera-falcon',
+    name: 'Jeera',
+    brand: 'Royal Falcon',
+    unit: 'Bags',
+    openingStock: 100,
+  },
+];
+
+const todayStr = new Date().toISOString().split('T')[0];
+
+export const INITIAL_TRANSACTIONS: Transaction[] = [
+  // Muri (Shyam): 20 + 10 purchase - 14 sales = 16 bags
+  {
+    id: 'tx-1',
+    date: todayStr,
+    itemId: 'muri-shyam',
+    type: 'PURCHASE',
+    quantity: 10,
+  },
+  {
+    id: 'tx-2',
+    date: todayStr,
+    itemId: 'muri-shyam',
+    type: 'SALE',
+    quantity: 14,
+  },
+  // Jeera (Swastik): 250 - 40 sales = 210 bags
+  {
+    id: 'tx-3',
+    date: todayStr,
+    itemId: 'jeera-swastik',
+    type: 'SALE',
+    quantity: 40,
+  },
+];
+
+// --- AUTH ---
 export function checkAuth(): boolean {
   if (!isClient) return false;
-  try {
-    const isAuthed = localStorage.getItem(STORAGE_KEYS.AUTH);
-    return isAuthed === 'true';
-  } catch {
-    return false;
-  }
+  return localStorage.getItem(STORAGE_KEYS.AUTH) === 'true';
 }
 
-export function setAuthenticated(status: boolean): void {
+export function setAuth(status: boolean): void {
   if (!isClient) return;
-  try {
-    if (status) {
-      localStorage.setItem(STORAGE_KEYS.AUTH, 'true');
-      localStorage.setItem(STORAGE_KEYS.LAST_ACTIVE, Date.now().toString());
-    } else {
-      localStorage.removeItem(STORAGE_KEYS.AUTH);
-    }
-  } catch (e) {
-    console.error('Failed to set auth state', e);
+  if (status) {
+    localStorage.setItem(STORAGE_KEYS.AUTH, 'true');
+  } else {
+    localStorage.removeItem(STORAGE_KEYS.AUTH);
   }
 }
 
-export function verifyPin(pin: string): boolean {
-  return pin.trim() === MASTER_PIN;
-}
-
-// --- ITEMS STORAGE ---
-export function getStoredItems(): Item[] {
+// --- ITEMS ---
+export function getItems(): Item[] {
   if (!isClient) return INITIAL_ITEMS;
   try {
     const data = localStorage.getItem(STORAGE_KEYS.ITEMS);
     if (!data) {
-      // First time initialization
       localStorage.setItem(STORAGE_KEYS.ITEMS, JSON.stringify(INITIAL_ITEMS));
       return INITIAL_ITEMS;
     }
     return JSON.parse(data);
-  } catch (e) {
-    console.error('Error reading items from storage', e);
+  } catch {
     return INITIAL_ITEMS;
   }
 }
 
 export function saveItems(items: Item[]): void {
   if (!isClient) return;
-  try {
-    localStorage.setItem(STORAGE_KEYS.ITEMS, JSON.stringify(items));
-  } catch (e) {
-    console.error('Error saving items', e);
-  }
+  localStorage.setItem(STORAGE_KEYS.ITEMS, JSON.stringify(items));
 }
 
-// --- TRANSACTIONS STORAGE ---
-export function getStoredTransactions(): Transaction[] {
+// --- TRANSACTIONS ---
+export function getTransactions(): Transaction[] {
   if (!isClient) return INITIAL_TRANSACTIONS;
   try {
     const data = localStorage.getItem(STORAGE_KEYS.TRANSACTIONS);
     if (!data) {
-      // First time initialization
       localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(INITIAL_TRANSACTIONS));
       return INITIAL_TRANSACTIONS;
     }
     return JSON.parse(data);
-  } catch (e) {
-    console.error('Error reading transactions from storage', e);
+  } catch {
     return INITIAL_TRANSACTIONS;
   }
 }
 
-export function saveTransactions(transactions: Transaction[]): void {
+export function saveTransactions(txs: Transaction[]): void {
   if (!isClient) return;
-  try {
-    localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(transactions));
-  } catch (e) {
-    console.error('Error saving transactions', e);
-  }
+  localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(txs));
 }
 
-// --- STOCK CALCULATIONS ---
-/**
- * Calculates stock balances for each item on a specific target date (YYYY-MM-DD).
- * Opening for target date = Item openingStockBags + sum of all past purchases before target date - sum of all past sales before target date + past adjustments
- * Day purchases = purchases on target date
- * Day sales = sales on target date
- * Closing = Opening + Purchases - Sales + Adjustments
- */
-export function calculateDailyStockSummary(
+// --- CORE STOCK CALCULATION ---
+// Formula: Opening Stock + Purchase - Sales = Current/Closing Stock
+export function calculateDayStock(
   targetDate: string,
   items: Item[],
   transactions: Transaction[]
-): DailyItemSummary[] {
+): DayStockRow[] {
   return items.map((item) => {
-    let openingBags = item.openingStockBags || 0;
-    let purchaseBags = 0;
-    let saleBags = 0;
-    let adjustmentBags = 0;
+    let opening = item.openingStock || 0;
+    let purchase = 0;
+    let sales = 0;
 
     for (const tx of transactions) {
       if (tx.itemId !== item.id) continue;
 
       if (tx.date < targetDate) {
-        // Prior to this date -> belongs to opening stock calculation
-        if (tx.type === 'PURCHASE') {
-          openingBags += tx.bags;
-        } else if (tx.type === 'SALE') {
-          openingBags -= tx.bags;
-        } else if (tx.type === 'ADJUSTMENT') {
-          openingBags += tx.bags;
-        }
+        // Prior date
+        if (tx.type === 'PURCHASE') opening += tx.quantity;
+        if (tx.type === 'SALE') opening -= tx.quantity;
       } else if (tx.date === targetDate) {
-        // Occurred on the selected target date
-        if (tx.type === 'PURCHASE') {
-          purchaseBags += tx.bags;
-        } else if (tx.type === 'SALE') {
-          saleBags += tx.bags;
-        } else if (tx.type === 'ADJUSTMENT') {
-          adjustmentBags += tx.bags;
-        }
+        // Today / selected date
+        if (tx.type === 'PURCHASE') purchase += tx.quantity;
+        if (tx.type === 'SALE') sales += tx.quantity;
       }
     }
 
-    const closingBags = openingBags + purchaseBags - saleBags + adjustmentBags;
-    const weightPerBag = item.weightPerBagKg || 50;
-
-    const openingWeightKg = openingBags * weightPerBag;
-    const purchaseWeightKg = purchaseBags * weightPerBag;
-    const saleWeightKg = saleBags * weightPerBag;
-    const closingWeightKg = closingBags * weightPerBag;
-    const closingQuintals = Number((closingWeightKg / 100).toFixed(2));
-
-    const isLowStock = closingBags <= (item.minAlertBags || 10);
+    const closing = opening + purchase - sales;
 
     return {
       itemId: item.id,
-      item,
-      openingBags,
-      openingWeightKg,
-      purchaseBags,
-      purchaseWeightKg,
-      saleBags,
-      saleWeightKg,
-      adjustmentBags,
-      closingBags,
-      closingWeightKg,
-      closingQuintals,
-      isLowStock,
+      name: item.name,
+      brand: item.brand,
+      unit: item.unit || 'Bags',
+      openingStock: opening,
+      purchase,
+      sales,
+      closingStock: closing,
     };
   });
-}
-
-/**
- * Calculates current real-time stock for all items across all time up to present
- */
-export function calculateCurrentStock(
-  items: Item[],
-  transactions: Transaction[]
-): Map<string, { currentBags: number; currentWeightKg: number; isLowStock: boolean }> {
-  const stockMap = new Map<string, { currentBags: number; currentWeightKg: number; isLowStock: boolean }>();
-
-  items.forEach((item) => {
-    let bags = item.openingStockBags || 0;
-    for (const tx of transactions) {
-      if (tx.itemId === item.id) {
-        if (tx.type === 'PURCHASE') bags += tx.bags;
-        else if (tx.type === 'SALE') bags -= tx.bags;
-        else if (tx.type === 'ADJUSTMENT') bags += tx.bags;
-      }
-    }
-    const weightPerBag = item.weightPerBagKg || 50;
-    stockMap.set(item.id, {
-      currentBags: bags,
-      currentWeightKg: bags * weightPerBag,
-      isLowStock: bags <= (item.minAlertBags || 10),
-    });
-  });
-
-  return stockMap;
-}
-
-/**
- * Calculate overall dashboard metrics
- */
-export function calculateOverallSummary(
-  targetDate: string,
-  items: Item[],
-  transactions: Transaction[]
-): OverallStockSummary {
-  const dailySummary = calculateDailyStockSummary(targetDate, items, transactions);
-
-  let totalBags = 0;
-  let totalWeightKg = 0;
-  let lowStockCount = 0;
-  let todayPurchases = 0;
-  let todaySales = 0;
-
-  dailySummary.forEach((ds) => {
-    totalBags += ds.closingBags;
-    totalWeightKg += ds.closingWeightKg;
-    if (ds.isLowStock) lowStockCount++;
-    todayPurchases += ds.purchaseBags;
-    todaySales += ds.saleBags;
-  });
-
-  return {
-    totalItems: items.length,
-    totalBags,
-    totalWeightKg,
-    totalQuintals: Number((totalWeightKg / 100).toFixed(2)),
-    lowStockItemsCount: lowStockCount,
-    todayPurchasesBags: todayPurchases,
-    todaySalesBags: todaySales,
-  };
-}
-
-// --- BACKUP & RESTORE ---
-export function exportBackupData(): string {
-  const items = getStoredItems();
-  const transactions = getStoredTransactions();
-  const backupObject = {
-    appName: 'Jain Bhandar Wholesale Stock Management',
-    version: '1.0',
-    exportTimestamp: new Date().toISOString(),
-    data: {
-      items,
-      transactions,
-    },
-  };
-  return JSON.stringify(backupObject, null, 2);
-}
-
-export function importBackupData(jsonString: string): { success: boolean; message: string } {
-  try {
-    const parsed = JSON.parse(jsonString);
-    if (!parsed.data || !Array.isArray(parsed.data.items) || !Array.isArray(parsed.data.transactions)) {
-      return { success: false, message: 'Invalid backup format. Missing items or transactions list.' };
-    }
-    saveItems(parsed.data.items);
-    saveTransactions(parsed.data.transactions);
-    return { success: true, message: `Successfully restored ${parsed.data.items.length} items and ${parsed.data.transactions.length} records.` };
-  } catch (err: unknown) {
-    const errorMsg = err instanceof Error ? err.message : 'Unknown error';
-    return { success: false, message: `Failed to parse file: ${errorMsg}` };
-  }
-}
-
-export function resetToDemo(): void {
-  saveItems(INITIAL_ITEMS);
-  saveTransactions(INITIAL_TRANSACTIONS);
 }
