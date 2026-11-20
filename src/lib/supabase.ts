@@ -263,15 +263,32 @@ create table if not exists public.transactions (
   created_at timestamp with time zone default timezone('utc'::text, now())
 );
 
--- 3. Enable Realtime Live Sync
-alter publication supabase_realtime add table public.items;
-alter publication supabase_realtime add table public.transactions;
+-- 3. Safely enable Realtime Live Sync (skips if already added)
+do $$
+begin
+  if not exists (
+    select 1 from pg_publication_tables 
+    where pubname = 'supabase_realtime' and tablename = 'items'
+  ) then
+    alter publication supabase_realtime add table public.items;
+  end if;
 
--- 4. Enable Public Access (RLS)
+  if not exists (
+    select 1 from pg_publication_tables 
+    where pubname = 'supabase_realtime' and tablename = 'transactions'
+  ) then
+    alter publication supabase_realtime add table public.transactions;
+  end if;
+end $$;
+
+-- 4. Enable Public Access (RLS) safely
 alter table public.items enable row level security;
 alter table public.transactions enable row level security;
 
+drop policy if exists "Allow all on items" on public.items;
 create policy "Allow all on items" on public.items for all using (true) with check (true);
+
+drop policy if exists "Allow all on transactions" on public.transactions;
 create policy "Allow all on transactions" on public.transactions for all using (true) with check (true);
 
 -- 5. Seed Initial Items (Muri 16 bags, Jeera 210 bags)
