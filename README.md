@@ -1,100 +1,116 @@
 # Jain Bhandar — Wholesale Stock Management
 
-A modern, fast, wholesale inventory and stock management web application built specifically for wholesale merchants, mandi traders, and godown operations (e.g. **Muri 16 bags**, **Jeera 210 bags** across multiple brands, pack sizes, and grades).
+A simple, real-time wholesale stock calculator for **Jain Bhandar** admin and staff.
 
-- **Production Domain Target:** `stock.jainbhandar.com`
-- **Deployment Platform:** Vercel
-- **Security Gatekeeper PIN:** `1326` (required before entering the web app)
+$$\text{Opening Stock} + \text{Purchase (+)} - \text{Sales (-)} = \text{Current / Closing Stock}$$
 
----
-
-## 🌟 Key Features
-
-1. **Wholesale Stock Formula:**
-   $$\text{Current Stock (Bags)} = \text{Opening Stock} + \text{Purchases (Inward)} - \text{Sales (Outward)} + \text{Adjustments}$$
-
-2. **Dual Metric Tracking (Bags & Weight):**
-   - Automatically tracks both wholesale packaging (**Bags / Katta / Bori**) and total net weight in **Kg & Quintals (Qtl)**.
-   - Example: 210 Bags @ 50 kg/bag = 10,500 kg (105 Quintals).
-
-3. **Brands, Varieties & Multi-Commodity:**
-   - Preloaded with Jain Bhandar commodities:
-     - **Muri (Puffed Rice):** Shyam Brand, Ganesh Brand (16 bags current stock)
-     - **Jeera (Cumin Seeds):** Swastik Mandi 99% Clean, Royal Falcon Sortex (210 bags current stock)
-     - **Chana Dal:** Hathi Gold
-     - **Mustard / Rai:** Desi Mandi
-     - **Sugar / Chini:** Dhampur M-30
-   - Easily add unlimited custom commodities, mills, brands, pack sizes, and godown locations.
-
-4. **Daily Record & Historical Day Stock Ledger:**
-   - Day-wise date picker (Today, Yesterday, or any previous date).
-   - View day opening stock, daily inward arrivals, daily outward dispatches, and daily closing tally.
-
-5. **Quick 1-Click Counter Entry:**
-   - 1-click `+` (Purchase/Inward) and `-` (Sale/Outward) buttons directly on every table row.
-   - Quick bag increment buttons: `+10`, `+25`, `+50`, `+100` bags.
-   - Optional Party Name, Challan/Bill No., Vehicle No., Rate per bag, and Total Amount.
-   - Stock protection alert if attempting to sell more bags than available in the godown.
-
-6. **Low-Stock Alert Badges:**
-   - Automatically warns when stock drops below threshold.
-   - 1-click filter to display only low-stock commodities needing reorder from mandi/mills.
-
-7. **Reports & Exports (PDF & Excel):**
-   - **Download PDF Closing Stock Sheet:** Formatted Jain Bhandar letterhead report with opening, purchases, sales, and closing bags/quintals for physical counter audits.
-   - **Download Excel (.xlsx):** Formatted spreadsheets for accountants, CA, and tax filings.
-   - **Audit Ledger:** Full transaction history with ability to delete or undo wrong entries.
-
-8. **Gatekeeper Security PIN (`1326`):**
-   - Numeric PIN pad and keyboard input before accessing any stock numbers.
-   - Lock button in the top navigation to lock the screen instantly when stepping away from the counter.
-
-9. **Data Safety & Backup:**
-   - Browser storage + 1-click **Download Backup (.json)**.
-   - 1-click **Restore from Backup** to sync data between phone and shop PC.
+- **Target Domain:** `stock.jainbhandar.com`
+- **Gatekeeper Password:** `1326`
+- **Database:** Supabase (PostgreSQL with Realtime Live Sync across all phones & computers)
+- **Deployment:** Vercel
 
 ---
 
-## 🚀 Local Development
+## ⚡ Supabase Setup (For Admin & Staff Multi-User Sync)
 
-```bash
-# 1. Install dependencies
-pnpm install
+### Step 1: Create a Free Project on Supabase
+1. Go to [supabase.com](https://supabase.com) and create a free project named `jain-bhandar-stock`.
+2. Choose your database password and region (e.g. `ap-south-1` Mumbai).
 
-# 2. Run local development server
-pnpm dev
+### Step 2: Run the SQL Table Setup
+1. In your Supabase project dashboard, open the **SQL Editor** on the left menu.
+2. Paste and run this SQL query:
 
-# 3. Open in browser
-http://localhost:3000
+```sql
+-- 1. Items Table
+create table if not exists public.items (
+  id text primary key,
+  name text not null,
+  brand text not null,
+  unit text default 'Bags',
+  opening_stock numeric default 0,
+  created_at timestamp with time zone default timezone('utc'::text, now())
+);
+
+-- 2. Transactions Table
+create table if not exists public.transactions (
+  id text primary key,
+  date text not null,
+  item_id text references public.items(id) on delete cascade,
+  type text not null,
+  quantity numeric not null,
+  created_at timestamp with time zone default timezone('utc'::text, now())
+);
+
+-- 3. Enable Realtime Live Sync
+alter publication supabase_realtime add table public.items;
+alter publication supabase_realtime add table public.transactions;
+
+-- 4. Enable Public Access for Staff & Admin
+alter table public.items enable row level security;
+alter table public.transactions enable row level security;
+
+create policy "Allow all on items" on public.items for all using (true) with check (true);
+create policy "Allow all on transactions" on public.transactions for all using (true) with check (true);
+
+-- 5. Seed Initial Items (Muri 16 bags, Jeera 210 bags)
+insert into public.items (id, name, brand, unit, opening_stock) values
+  ('muri-shyam', 'Muri', 'Shyam', 'Bags', 20),
+  ('muri-ganesh', 'Muri', 'Ganesh', 'Bags', 50),
+  ('jeera-swastik', 'Jeera', 'Swastik', 'Bags', 250),
+  ('jeera-falcon', 'Jeera', 'Royal Falcon', 'Bags', 100)
+on conflict (id) do nothing;
+
+insert into public.transactions (id, date, item_id, type, quantity) values
+  ('tx-init-1', to_char(current_date, 'YYYY-MM-DD'), 'muri-shyam', 'PURCHASE', 10),
+  ('tx-init-2', to_char(current_date, 'YYYY-MM-DD'), 'muri-shyam', 'SALE', 14),
+  ('tx-init-3', to_char(current_date, 'YYYY-MM-DD'), 'jeera-swastik', 'SALE', 40)
+on conflict (id) do nothing;
 ```
 
-PIN to unlock: `1326`
+### Step 3: Get your API Keys
+In Supabase, go to **Project Settings > API**:
+- **Project URL** (e.g. `https://xyzabc.supabase.co`)
+- **Project API Keys > anon / public** (e.g. `eyJhbGciOi...`)
 
 ---
 
-## 🌐 Deploying to Vercel & Setting Up `stock.jainbhandar.com`
+## 🚀 Push to GitHub
 
-### Step 1: Push to GitHub
+In your terminal:
+
 ```bash
-git init
 git add .
-git commit -m "Initial Jain Bhandar wholesale stock management app"
+git commit -m "feat: real-time multi-user wholesale stock app for Jain Bhandar"
 git branch -M main
-git remote add origin https://github.com/<your-username>/jb-stock-management.git
+git remote add origin https://github.com/<YOUR-GITHUB-USERNAME>/jb-stock-management.git
 git push -u origin main
 ```
 
-### Step 2: Import to Vercel
-1. Log in to [vercel.com](https://vercel.com).
-2. Click **"Add New Project"** and import your GitHub repository.
-3. Framework Preset: **Next.js** (detected automatically).
-4. Click **"Deploy"**.
+*(If you already have a repository on GitHub, replace `<YOUR-GITHUB-USERNAME>` with your GitHub username or paste your repo URL).*
 
-### Step 3: Connect Custom Domain `stock.jainbhandar.com`
-1. In your Vercel project dashboard, go to **Settings > Domains**.
-2. Type `stock.jainbhandar.com` and click **Add**.
-3. In your DNS provider for `jainbhandar.com` (GoDaddy, Cloudflare, Namecheap, etc.), add the following DNS record:
+---
+
+## 🌐 Deploy to Vercel (For Everyone to Use)
+
+1. Open [vercel.com](https://vercel.com) and click **"Add New Project"**.
+2. Select your `jb-stock-management` GitHub repository.
+3. In **Environment Variables**, add:
+   - `NEXT_PUBLIC_SUPABASE_URL` = Your Supabase Project URL
+   - `NEXT_PUBLIC_SUPABASE_ANON_KEY` = Your Supabase Anon Key
+4. Click **Deploy**.
+
+### Add Custom Subdomain (`stock.jainbhandar.com`)
+1. On Vercel, go to **Settings > Domains**.
+2. Enter `stock.jainbhandar.com` and click **Add**.
+3. In your DNS manager for `jainbhandar.com`, add:
    - **Type:** `CNAME`
-   - **Name / Host:** `stock`
-   - **Value / Target:** `cname.vercel-dns.com`
-4. Once DNS propagates (usually 1-5 minutes), Vercel automatically issues a free SSL certificate, and your site will be live at `https://stock.jainbhandar.com`.
+   - **Name:** `stock`
+   - **Target:** `cname.vercel-dns.com`
+
+---
+
+## 📱 How Staff & Admin Use the App
+- Everyone opens **`stock.jainbhandar.com`** (or `localhost:3000`).
+- Enter **`1326`** to unlock.
+- Any purchase or sale logged by staff on their mobile phone instantly updates on the admin's computer screen via Supabase Realtime!

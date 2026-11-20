@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useState, useEffect, useMemo } from 'react';
-import { Item, Transaction, DayStockRow } from '@/types/stock';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { Item, Transaction } from '@/types/stock';
 import { 
   checkAuth, 
   setAuth, 
@@ -16,9 +16,10 @@ import {
   getSupabaseConfig, 
   fetchSupabaseItems, 
   fetchSupabaseTransactions,
-  syncItemToSupabase,
+  saveItemToSupabase,
   deleteItemFromSupabase,
-  syncTransactionToSupabase
+  saveTransactionsToSupabase,
+  subscribeToStockChanges
 } from '@/lib/supabase';
 import { GatekeeperModal } from '@/components/GatekeeperModal';
 import { Header } from '@/components/Header';
@@ -49,19 +50,15 @@ export default function HomePage() {
   const [isSupabaseOpen, setIsSupabaseOpen] = useState(false);
   const [hasSupabase, setHasSupabase] = useState(false);
 
-  // Initial load
-  useEffect(() => {
-    setIsMounted(true);
-    setIsAuthed(checkAuth());
-    loadAllData();
-  }, []);
-
-  const loadAllData = async () => {
+  // Load latest data from Supabase (or localStorage fallback)
+  const loadAllData = useCallback(async () => {
     const cfg = getSupabaseConfig();
     if (cfg) {
       setHasSupabase(true);
-      const cloudItems = await fetchSupabaseItems();
-      const cloudTx = await fetchSupabaseTransactions();
+      const [cloudItems, cloudTx] = await Promise.all([
+        fetchSupabaseItems(),
+        fetchSupabaseTransactions(),
+      ]);
       if (cloudItems !== null && cloudTx !== null) {
         setItems(cloudItems);
         setTransactions(cloudTx);
@@ -74,14 +71,32 @@ export default function HomePage() {
     }
     setItems(getItems());
     setTransactions(getTransactions());
-  };
+  }, []);
+
+  // Initial load
+  useEffect(() => {
+    setIsMounted(true);
+    setIsAuthed(checkAuth());
+    loadAllData();
+  }, [loadAllData]);
+
+  // Realtime Live Subscription: Auto-update when another staff/admin saves stock
+  useEffect(() => {
+    if (!hasSupabase) return;
+    const channel = subscribeToStockChanges(() => {
+      loadAllData();
+    });
+    return () => {
+      channel?.unsubscribe();
+    };
+  }, [hasSupabase, loadAllData]);
 
   const handleLock = () => {
     setAuth(false);
     setIsAuthed(false);
   };
 
-  // Calculate day stock rows
+  // Calculate day stock rows: Opening + Purchase - Sales = Current/Closing Stock
   const stockRows = useMemo(() => {
     return calculateDayStock(selectedDate, items, transactions);
   }, [selectedDate, items, transactions]);
@@ -97,7 +112,7 @@ export default function HomePage() {
   // Bulk Purchase / Sale save
   const handleSaveBulk = async (entries: { itemId: string; quantity: number }[]) => {
     const newTxs: Transaction[] = entries.map((e) => ({
-      id: `tx-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+      id: `tx-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       date: selectedDate,
       itemId: e.itemId,
       type: bulkType,
@@ -108,11 +123,9 @@ export default function HomePage() {
     setTransactions(updated);
     saveTransactions(updated);
 
-    // Sync to Supabase in background if configured
+    // Save to Supabase (so all staff devices update immediately)
     if (hasSupabase) {
-      for (const t of newTxs) {
-        syncTransactionToSupabase(t);
-      }
+      await saveTransactionsToSupabase(newTxs);
     }
   };
 
@@ -124,7 +137,7 @@ export default function HomePage() {
     if (isNaN(qty) || qty <= 0) return;
 
     const newTx: Transaction = {
-      id: `tx-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+      id: `tx-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       date: selectedDate,
       itemId,
       type,
@@ -136,7 +149,7 @@ export default function HomePage() {
     saveTransactions(updated);
 
     if (hasSupabase) {
-      syncTransactionToSupabase(newTx);
+      await saveTransactionsToSupabase([newTx]);
     }
   };
 
@@ -153,7 +166,7 @@ export default function HomePage() {
     saveItems(updated);
 
     if (hasSupabase) {
-      syncItemToSupabase(saved);
+      await saveItemToSupabase(saved);
     }
   };
 
@@ -166,7 +179,7 @@ export default function HomePage() {
     saveTransactions(updatedTx);
 
     if (hasSupabase) {
-      deleteItemFromSupabase(itemId);
+      await deleteItemFromSupabase(itemId);
     }
   };
 
