@@ -26,8 +26,9 @@ import { Header } from '@/components/Header';
 import { DateBar } from '@/components/DateBar';
 import { BulkEntryModal } from '@/components/BulkEntryModal';
 import { ItemModal } from '@/components/ItemModal';
+import { ManageItemsModal } from '@/components/ManageItemsModal';
 import { SupabaseModal } from '@/components/SupabaseModal';
-import { Plus, Minus, Printer, Edit2, Search } from 'lucide-react';
+import { Plus, Minus, Printer, Edit2, Search, Trash2, Package } from 'lucide-react';
 
 export default function HomePage() {
   const [isAuthed, setIsAuthed] = useState<boolean>(false);
@@ -44,6 +45,7 @@ export default function HomePage() {
   const [isBulkOpen, setIsBulkOpen] = useState(false);
   const [bulkType, setBulkType] = useState<'PURCHASE' | 'SALE'>('PURCHASE');
 
+  const [isManageItemsOpen, setIsManageItemsOpen] = useState(false);
   const [isItemModalOpen, setIsItemModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<Item | null>(null);
 
@@ -153,7 +155,7 @@ export default function HomePage() {
     }
   };
 
-  // Item Save & Delete
+  // Item Save & Delete (Add / Edit / Delete)
   const handleSaveItem = async (saved: Item) => {
     const exists = items.some((i) => i.id === saved.id);
     let updated: Item[];
@@ -214,10 +216,7 @@ export default function HomePage() {
           setBulkType('SALE');
           setIsBulkOpen(true);
         }}
-        onOpenAddItem={() => {
-          setEditingItem(null);
-          setIsItemModalOpen(true);
-        }}
+        onOpenManageItems={() => setIsManageItemsOpen(true)}
         onPrintPDF={handlePrintPDF}
         onOpenSupabase={() => setIsSupabaseOpen(true)}
         onLock={handleLock}
@@ -263,7 +262,7 @@ export default function HomePage() {
           </div>
         </div>
 
-        {/* Controls row: Search + Bulk Buttons + Print */}
+        {/* Controls row: Search + Bulk Buttons + Manage Items + Print */}
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 mb-3">
           <div className="relative flex-1 max-w-xs">
             <Search className="w-3.5 h-3.5 text-gray-400 absolute left-3 top-2.5" />
@@ -276,18 +275,40 @@ export default function HomePage() {
             />
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Manage / Add Items Button */}
+            <button
+              onClick={() => {
+                setEditingItem(null);
+                setIsItemModalOpen(true);
+              }}
+              className="px-3 py-1.5 bg-white hover:bg-gray-100 text-gray-800 border border-gray-300 text-xs font-bold rounded-lg flex items-center gap-1.5 transition"
+            >
+              <Plus className="w-3.5 h-3.5 text-green-600" />
+              <span>Add Item</span>
+            </button>
+
+            <button
+              onClick={() => setIsManageItemsOpen(true)}
+              className="px-3 py-1.5 bg-white hover:bg-gray-100 text-gray-800 border border-gray-300 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition"
+            >
+              <Package className="w-3.5 h-3.5 text-gray-500" />
+              <span>Catalog ({items.length})</span>
+            </button>
+
+            {/* Bulk Purchase */}
             <button
               onClick={() => {
                 setBulkType('PURCHASE');
                 setIsBulkOpen(true);
               }}
-              className="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white text-xs font-bold rounded-lg flex items-center gap-1 transition"
+              className="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white text-xs font-bold rounded-lg flex items-center gap-1 transition shadow-sm"
             >
               <Plus className="w-3.5 h-3.5" />
               <span>Bulk Purchase</span>
             </button>
 
+            {/* Bulk Sale */}
             <button
               onClick={() => {
                 setBulkType('SALE');
@@ -299,12 +320,13 @@ export default function HomePage() {
               <span>Bulk Sale</span>
             </button>
 
+            {/* Print Stock */}
             <button
               onClick={handlePrintPDF}
               className="px-3 py-1.5 bg-gray-900 hover:bg-black text-white text-xs font-bold rounded-lg flex items-center gap-1 transition"
             >
               <Printer className="w-3.5 h-3.5" />
-              <span>Print Stock (PDF)</span>
+              <span className="hidden sm:inline">Print Stock (PDF)</span>
             </button>
           </div>
         </div>
@@ -325,7 +347,7 @@ export default function HomePage() {
                   <th className="py-2.5 px-3 text-right font-black bg-green-50/60 text-green-900">
                     Current Stock
                   </th>
-                  <th className="py-2.5 px-3 text-center w-28">Quick Action</th>
+                  <th className="py-2.5 px-3 text-center w-36">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -375,7 +397,7 @@ export default function HomePage() {
                           -
                         </button>
 
-                        {/* Edit Item Info */}
+                        {/* Edit Item Details */}
                         <button
                           onClick={() => {
                             const it = items.find((i) => i.id === r.itemId);
@@ -384,10 +406,25 @@ export default function HomePage() {
                               setIsItemModalOpen(true);
                             }
                           }}
-                          title="Edit item"
-                          className="w-6 h-6 rounded hover:bg-gray-100 text-gray-500 flex items-center justify-center"
+                          title="Edit Item Details"
+                          className="px-1.5 py-0.5 rounded bg-gray-100 hover:bg-gray-200 text-gray-600 text-[11px] font-semibold flex items-center gap-0.5 transition"
                         >
                           <Edit2 className="w-3 h-3" />
+                          <span>Edit</span>
+                        </button>
+
+                        {/* Delete Item */}
+                        <button
+                          onClick={() => {
+                            const it = items.find((i) => i.id === r.itemId);
+                            if (it && confirm(`Delete "${it.name} (${it.brand})"?`)) {
+                              handleDeleteItem(it.id);
+                            }
+                          }}
+                          title="Delete Item"
+                          className="w-6 h-6 rounded hover:bg-red-50 text-red-400 hover:text-red-600 flex items-center justify-center transition"
+                        >
+                          <Trash2 className="w-3 h-3" />
                         </button>
                       </div>
                     </td>
@@ -425,7 +462,7 @@ export default function HomePage() {
         onSave={handleSaveBulk}
       />
 
-      {/* Item Modal (Add / Edit / Delete) */}
+      {/* Item Modal (Add / Edit) */}
       <ItemModal
         isOpen={isItemModalOpen}
         onClose={() => {
@@ -435,6 +472,22 @@ export default function HomePage() {
         editItem={editingItem}
         onSave={handleSaveItem}
         onDelete={handleDeleteItem}
+      />
+
+      {/* Manage Items Catalog Modal (Add / Edit / Delete List) */}
+      <ManageItemsModal
+        isOpen={isManageItemsOpen}
+        onClose={() => setIsManageItemsOpen(false)}
+        items={items}
+        onAddNew={() => {
+          setEditingItem(null);
+          setIsItemModalOpen(true);
+        }}
+        onEditItem={(item) => {
+          setEditingItem(item);
+          setIsItemModalOpen(true);
+        }}
+        onDeleteItem={handleDeleteItem}
       />
 
       {/* Supabase Link Modal */}

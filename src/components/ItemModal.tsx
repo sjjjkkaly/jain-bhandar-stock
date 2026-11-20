@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { Item } from '@/types/stock';
-import { X, Trash2, Check } from 'lucide-react';
+import { X, Trash2, Check, PackagePlus, Edit } from 'lucide-react';
 
 interface ItemModalProps {
   isOpen: boolean;
@@ -58,7 +58,7 @@ export const ItemModal: React.FC<ItemModalProps> = ({
 
   const handleDelete = () => {
     if (!editItem || !onDelete) return;
-    if (confirm(`Delete "${editItem.name} (${editItem.brand})"?`)) {
+    if (confirm(`Are you sure you want to delete "${editItem.name} (${editItem.brand})"?\nThis will remove it from inventory.`)) {
       onDelete(editItem.id);
       onClose();
     }
@@ -70,9 +70,16 @@ export const ItemModal: React.FC<ItemModalProps> = ({
         
         {/* Header */}
         <div className="p-4 bg-gray-900 text-white flex items-center justify-between">
-          <h2 className="text-sm font-bold">
-            {editItem ? 'Edit Item' : 'Add Item'}
-          </h2>
+          <div className="flex items-center gap-2">
+            {editItem ? (
+              <Edit className="w-4 h-4 text-green-400" />
+            ) : (
+              <PackagePlus className="w-4 h-4 text-green-400" />
+            )}
+            <h2 className="text-sm font-bold">
+              {editItem ? 'Edit Item Details' : 'Add New Item to Inventory'}
+            </h2>
+          </div>
           <button
             onClick={onClose}
             className="w-7 h-7 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center"
@@ -90,7 +97,7 @@ export const ItemModal: React.FC<ItemModalProps> = ({
             <input
               type="text"
               required
-              placeholder="e.g. Muri, Jeera"
+              placeholder="e.g. Muri, Jeera, Chana Dal"
               value={name}
               onChange={(e) => setName(e.target.value)}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-semibold outline-none focus:border-green-600"
@@ -144,7 +151,7 @@ export const ItemModal: React.FC<ItemModalProps> = ({
               <button
                 type="button"
                 onClick={handleDelete}
-                className="px-3 py-2 rounded-lg text-red-600 hover:bg-red-50 text-xs font-bold flex items-center gap-1"
+                className="px-3 py-2 rounded-lg text-red-600 hover:bg-red-50 text-xs font-bold flex items-center gap-1 border border-red-200"
               >
                 <Trash2 className="w-3.5 h-3.5" />
                 <span>Delete</span>
@@ -161,10 +168,10 @@ export const ItemModal: React.FC<ItemModalProps> = ({
               </button>
               <button
                 type="submit"
-                className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-xs font-bold rounded-lg flex items-center gap-1"
+                className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-xs font-bold rounded-lg flex items-center gap-1 shadow-sm"
               >
                 <Check className="w-4 h-4" />
-                <span>Save</span>
+                <span>{editItem ? 'Save Changes' : 'Save Item'}</span>
               </button>
             </div>
           </div>
