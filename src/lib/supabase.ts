@@ -197,6 +197,9 @@ export function subscribeToStockChanges(onDataChange: () => void): RealtimeChann
   }
 }
 
+export const syncItemToSupabase = saveItemToSupabase;
+export const syncTransactionToSupabase = async (tx: Transaction) => saveTransactionsToSupabase([tx]);
+
 export const SUPABASE_SQL_SETUP = `
 -- COPY & RUN THIS IN SUPABASE SQL EDITOR (ONE CLICK):
 
