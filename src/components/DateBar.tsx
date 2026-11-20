@@ -8,20 +8,35 @@ interface DateBarProps {
   onSelectDate: (d: string) => void;
 }
 
+function formatDate(d: Date): string {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function parseLocalDate(dateStr: string): Date {
+  const parts = dateStr.split('-').map(Number);
+  if (parts.length === 3 && !isNaN(parts[0]) && !isNaN(parts[1]) && !isNaN(parts[2])) {
+    return new Date(parts[0], parts[1] - 1, parts[2]);
+  }
+  return new Date();
+}
+
 export const DateBar: React.FC<DateBarProps> = ({ selectedDate, onSelectDate }) => {
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = formatDate(new Date());
   const isToday = selectedDate === todayStr;
 
   const handlePrev = () => {
-    const d = new Date(selectedDate);
+    const d = parseLocalDate(selectedDate);
     d.setDate(d.getDate() - 1);
-    onSelectDate(d.toISOString().split('T')[0]);
+    onSelectDate(formatDate(d));
   };
 
   const handleNext = () => {
-    const d = new Date(selectedDate);
+    const d = parseLocalDate(selectedDate);
     d.setDate(d.getDate() + 1);
-    onSelectDate(d.toISOString().split('T')[0]);
+    onSelectDate(formatDate(d));
   };
 
   return (

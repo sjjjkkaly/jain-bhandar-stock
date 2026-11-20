@@ -11,6 +11,7 @@ interface HeaderProps {
   onOpenSupabase: () => void;
   onLock: () => void;
   isSupabaseConnected: boolean;
+  dbError?: string | null;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -21,6 +22,7 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenSupabase,
   onLock,
   isSupabaseConnected,
+  dbError,
 }) => {
   return (
     <header className="bg-white border-b border-gray-200 sticky top-0 z-30 shadow-sm">
@@ -80,15 +82,17 @@ export const Header: React.FC<HeaderProps> = ({
           <button
             onClick={onOpenSupabase}
             className={`p-1.5 rounded-lg border text-xs font-medium transition flex items-center gap-1 ${
-              isSupabaseConnected
+              dbError
+                ? 'bg-red-50 border-red-300 text-red-700 animate-pulse'
+                : isSupabaseConnected
                 ? 'bg-green-50 border-green-300 text-green-700'
-                : 'bg-gray-50 border-gray-200 text-gray-500 hover:text-gray-800'
+                : 'bg-amber-50 border-amber-300 text-amber-700'
             }`}
-            title="Supabase Database Settings"
+            title={dbError ? `Database Error: ${dbError}` : 'Supabase Database Settings'}
           >
             <Database className="w-3.5 h-3.5" />
             <span className="hidden lg:inline">
-              {isSupabaseConnected ? 'Cloud Active' : 'Supabase'}
+              {dbError ? 'Cloud Error' : isSupabaseConnected ? 'Cloud Active' : 'Connect Cloud'}
             </span>
           </button>
 

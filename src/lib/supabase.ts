@@ -240,8 +240,37 @@ export function subscribeToStockChanges(onDataChange: () => void): RealtimeChann
   }
 }
 
+// Deep test to verify table access and permissions
+export async function testSupabaseConnection(): Promise<{ ok: boolean; message: string; itemCount?: number }> {
+  const supabase = getSupabaseClient();
+  if (!supabase) {
+    return { ok: false, message: 'Supabase URL or Anon Key is not set on this device.' };
+  }
+
+  try {
+    const { data: items, error: itemErr } = await supabase.from('items').select('id');
+    if (itemErr) {
+      return { ok: false, message: `Items table error: ${itemErr.message} (Run the SQL query in Supabase SQL Editor)` };
+    }
+
+    const { error: txErr } = await supabase.from('transactions').select('id').limit(1);
+    if (txErr) {
+      return { ok: false, message: `Transactions table error: ${txErr.message} (Run the SQL query in Supabase SQL Editor)` };
+    }
+
+    return { 
+      ok: true, 
+      message: `Connected to Supabase! Found ${items?.length ?? 0} items in database.`,
+      itemCount: items?.length ?? 0
+    };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : 'Unknown error';
+    return { ok: false, message: msg };
+  }
+}
+
 export const SUPABASE_SQL_SETUP = `
--- COPY AND RUN THIS QUERY IN SUPABASE SQL EDITOR:
+-- COPY AND RUN THIS ENTIRE SCRIPT IN SUPABASE SQL EDITOR (SQL Editor -> New Query -> Run):
 
 -- 1. Create Items Table
 create table if not exists public.items (
@@ -281,17 +310,23 @@ begin
   end if;
 end $$;
 
--- 4. Enable Public Access (RLS) safely
+-- 4. GRANT FULL PERMISSIONS TO anon & authenticated (Fixes 42501 permission denied)
+grant usage on schema public to anon, authenticated, service_role;
+grant all on table public.items to anon, authenticated, service_role;
+grant all on table public.transactions to anon, authenticated, service_role;
+grant all on all sequences in schema public to anon, authenticated, service_role;
+
+-- 5. Open Row Level Security for staff & admin
 alter table public.items enable row level security;
 alter table public.transactions enable row level security;
 
 drop policy if exists "Allow all on items" on public.items;
-create policy "Allow all on items" on public.items for all using (true) with check (true);
+create policy "Allow all on items" on public.items for all to public using (true) with check (true);
 
 drop policy if exists "Allow all on transactions" on public.transactions;
-create policy "Allow all on transactions" on public.transactions for all using (true) with check (true);
+create policy "Allow all on transactions" on public.transactions for all to public using (true) with check (true);
 
--- 5. Seed Initial Items (Muri 16 bags, Jeera 210 bags)
+-- 6. Seed Initial Items (Muri 16 bags, Jeera 210 bags)
 insert into public.items (id, name, brand, unit, opening_stock) values
   ('muri-shyam', 'Muri', 'Shyam', 'Bags', 20),
   ('muri-ganesh', 'Muri', 'Ganesh', 'Bags', 50),

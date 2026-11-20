@@ -17,10 +17,19 @@ import { GatekeeperModal } from '@/components/GatekeeperModal';
 import { Header } from '@/components/Header';
 import { DateBar } from '@/components/DateBar';
 import { BulkEntryModal } from '@/components/BulkEntryModal';
+import { QuickAdjustModal } from '@/components/QuickAdjustModal';
 import { ItemModal } from '@/components/ItemModal';
 import { ManageItemsModal } from '@/components/ManageItemsModal';
 import { SupabaseModal } from '@/components/SupabaseModal';
-import { Plus, Minus, Printer, Edit2, Search, Trash2, Package, AlertTriangle, RefreshCw } from 'lucide-react';
+import { Plus, Minus, Printer, Edit2, Search, Trash2, Package, AlertTriangle, RefreshCw, CheckCircle2 } from 'lucide-react';
+
+function getTodayDateStr(): string {
+  const d = new Date();
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
 
 export default function HomePage() {
   const [isAuthed, setIsAuthed] = useState<boolean>(false);
@@ -28,16 +37,17 @@ export default function HomePage() {
 
   const [items, setItems] = useState<Item[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [selectedDate, setSelectedDate] = useState<string>(
-    new Date().toISOString().split('T')[0]
-  );
+  const [selectedDate, setSelectedDate] = useState<string>(getTodayDateStr());
   const [search, setSearch] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ text: string; isError: boolean } | null>(null);
 
   // Modals
   const [isBulkOpen, setIsBulkOpen] = useState(false);
   const [bulkType, setBulkType] = useState<'PURCHASE' | 'SALE'>('PURCHASE');
+
+  const [quickAdjustItem, setQuickAdjustItem] = useState<Item | null>(null);
+  const [quickAdjustType, setQuickAdjustType] = useState<'PURCHASE' | 'SALE'>('PURCHASE');
 
   const [isManageItemsOpen, setIsManageItemsOpen] = useState(false);
   const [isItemModalOpen, setIsItemModalOpen] = useState(false);
@@ -45,31 +55,47 @@ export default function HomePage() {
 
   const [isSupabaseOpen, setIsSupabaseOpen] = useState(false);
   const [hasSupabase, setHasSupabase] = useState(false);
+  const [isDbVerified, setIsDbVerified] = useState(false);
+  const [dbError, setDbError] = useState<string | null>(null);
+  const [supabaseHost, setSupabaseHost] = useState<string>('');
 
-  // Load latest data directly from Supabase (NO BROWSER STORAGE)
+  const showToast = (text: string, isError: boolean = false) => {
+    setToast({ text, isError });
+    setTimeout(() => setToast(null), 4000);
+  };
+
+  // Load latest data directly from Supabase (ZERO BROWSER STORAGE)
   const loadAllData = useCallback(async () => {
     const cfg = getSupabaseConfig();
     if (!cfg) {
       setHasSupabase(false);
+      setIsDbVerified(false);
+      setDbError(null);
+      setSupabaseHost('');
       return;
     }
     setHasSupabase(true);
+    try {
+      const u = new URL(cfg.url);
+      setSupabaseHost(u.hostname);
+    } catch {
+      setSupabaseHost(cfg.url.slice(0, 20));
+    }
 
     const [itemsRes, txRes] = await Promise.all([
       fetchSupabaseItems(),
       fetchSupabaseTransactions(),
     ]);
 
-    if (itemsRes.error) {
-      setErrorMessage(`Supabase error: ${itemsRes.error}`);
+    if (itemsRes.error || txRes.error) {
+      const err = itemsRes.error || txRes.error || 'Database connection error';
+      setDbError(err);
+      setIsDbVerified(false);
+      showToast(`Database error: ${err}`, true);
     } else {
+      setDbError(null);
+      setIsDbVerified(true);
       setItems(itemsRes.items);
-      setErrorMessage(null);
-    }
-
-    if (txRes.error) {
-      console.error('Transactions load error:', txRes.error);
-    } else {
       setTransactions(txRes.transactions);
     }
   }, []);
@@ -81,16 +107,16 @@ export default function HomePage() {
     loadAllData();
   }, [loadAllData]);
 
-  // Realtime Live Subscription + Auto-polling every 3 seconds for instant sync
+  // Realtime Live Subscription + 3-Second Live Auto-Polling
   useEffect(() => {
     if (!hasSupabase) return;
 
-    // 1. Supabase WebSockets Realtime
+    // 1. Supabase WebSocket Realtime
     const channel = subscribeToStockChanges(() => {
       loadAllData();
     });
 
-    // 2. Continuous 3-second auto-poll (ensures mobile browsers never miss updates)
+    // 2. Continuous 3-second background polling
     const interval = setInterval(() => {
       loadAllData();
     }, 3000);
@@ -122,7 +148,7 @@ export default function HomePage() {
   // Bulk Purchase / Sale save directly to Supabase
   const handleSaveBulk = async (entries: { itemId: string; quantity: number }[]) => {
     if (!hasSupabase) {
-      alert('Please connect Supabase first so this transaction is saved to the cloud!');
+      showToast('Please connect Supabase first!', true);
       setIsSupabaseOpen(true);
       return;
     }
@@ -140,52 +166,54 @@ export default function HomePage() {
     setIsLoading(false);
 
     if (!res.success) {
-      alert(`Failed to save to Supabase: ${res.error || 'Unknown error'}`);
+      showToast(`Failed to save: ${res.error || 'Unknown error'}`, true);
       return;
     }
 
-    // Refresh immediately from Supabase
+    showToast(`✓ Saved ${entries.length} items to Supabase cloud!`, false);
     await loadAllData();
   };
 
-  // Quick 1-item inline adjustment directly to Supabase
-  const handleQuickInline = async (itemId: string, type: 'PURCHASE' | 'SALE') => {
-    if (!hasSupabase) {
-      alert('Please connect Supabase first so this transaction is saved to the cloud!');
+  // Quick 1-item inline adjustment with Touch Modal
+  const handleOpenQuickAdjust = (itemId: string, type: 'PURCHASE' | 'SALE') => {
+    const targetItem = items.find((i) => i.id === itemId);
+    if (!targetItem) return;
+    setQuickAdjustItem(targetItem);
+    setQuickAdjustType(type);
+  };
+
+  const handleConfirmQuickAdjust = async (quantity: number) => {
+    if (!hasSupabase || !quickAdjustItem) {
+      showToast('Please connect Supabase first!', true);
       setIsSupabaseOpen(true);
       return;
     }
-
-    const input = prompt(`Enter ${type === 'PURCHASE' ? 'Purchase (+)' : 'Sale (-)'} quantity:`);
-    if (!input) return;
-    const qty = parseInt(input.trim());
-    if (isNaN(qty) || qty <= 0) return;
 
     setIsLoading(true);
     const newTx: Transaction = {
       id: `tx-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       date: selectedDate,
-      itemId,
-      type,
-      quantity: qty,
+      itemId: quickAdjustItem.id,
+      type: quickAdjustType,
+      quantity,
     };
 
     const res = await saveTransactionsToSupabase([newTx]);
     setIsLoading(false);
 
     if (!res.success) {
-      alert(`Failed to save to Supabase: ${res.error || 'Unknown error'}`);
+      showToast(`Failed to save: ${res.error || 'Unknown error'}`, true);
       return;
     }
 
-    // Refresh immediately from Supabase
+    showToast(`✓ Saved: ${quickAdjustType === 'PURCHASE' ? '+' : '-'}${quantity} ${quickAdjustItem.name} (${quickAdjustItem.brand})`, false);
     await loadAllData();
   };
 
   // Item Save & Delete directly to Supabase
   const handleSaveItem = async (saved: Item) => {
     if (!hasSupabase) {
-      alert('Please connect Supabase first so this item is saved to the cloud!');
+      showToast('Please connect Supabase first!', true);
       setIsSupabaseOpen(true);
       return;
     }
@@ -195,9 +223,10 @@ export default function HomePage() {
     setIsLoading(false);
 
     if (!res.success) {
-      alert(`Failed to save item: ${res.error}`);
+      showToast(`Failed to save item: ${res.error}`, true);
       return;
     }
+    showToast(`✓ Saved item: ${saved.name} (${saved.brand})`, false);
     await loadAllData();
   };
 
@@ -209,9 +238,10 @@ export default function HomePage() {
     setIsLoading(false);
 
     if (!res.success) {
-      alert(`Failed to delete item: ${res.error}`);
+      showToast(`Failed to delete item: ${res.error}`, true);
       return;
     }
+    showToast(`✓ Deleted item from Supabase`, false);
     await loadAllData();
   };
 
@@ -250,36 +280,47 @@ export default function HomePage() {
         onPrintPDF={handlePrintPDF}
         onOpenSupabase={() => setIsSupabaseOpen(true)}
         onLock={handleLock}
-        isSupabaseConnected={hasSupabase}
+        isSupabaseConnected={isDbVerified}
+        dbError={dbError}
       />
 
+      {/* Cloud Error Warning Banner */}
+      {dbError && (
+        <div className="bg-red-600 text-white px-4 py-2 text-xs font-bold text-center flex items-center justify-center gap-2 shadow-sm">
+          <AlertTriangle className="w-4 h-4 shrink-0" />
+          <span>Cloud Database Error: {dbError}</span>
+          <button
+            onClick={() => setIsSupabaseOpen(true)}
+            className="underline bg-red-700 hover:bg-red-800 px-2.5 py-0.5 rounded text-white ml-2 font-bold"
+          >
+            Fix in Settings
+          </button>
+        </div>
+      )}
+
       {/* Cloud Disconnected Warning Banner if not linked on this device */}
-      {!hasSupabase && (
+      {!hasSupabase && !dbError && (
         <div className="bg-amber-500 text-white px-4 py-2 text-xs font-bold text-center flex items-center justify-center gap-2 shadow-sm">
           <AlertTriangle className="w-4 h-4 shrink-0" />
           <span>
-            Supabase is not connected on this device yet!
+            Supabase is NOT connected on this device! Changes will not sync.
           </span>
           <button
             onClick={() => setIsSupabaseOpen(true)}
             className="underline bg-amber-600 hover:bg-amber-700 px-2.5 py-0.5 rounded text-white ml-1 font-bold"
           >
-            Connect Supabase Now
+            Connect Supabase
           </button>
         </div>
       )}
 
-      {/* Error Message Banner */}
-      {errorMessage && (
-        <div className="bg-red-50 border-b border-red-200 text-red-700 px-4 py-2 text-xs font-semibold text-center flex items-center justify-center gap-2">
-          <AlertTriangle className="w-4 h-4 shrink-0" />
-          <span>{errorMessage}</span>
-          <button
-            onClick={loadAllData}
-            className="underline ml-2 font-bold"
-          >
-            Retry
-          </button>
+      {/* Floating Status Toast */}
+      {toast && (
+        <div className={`fixed bottom-5 right-5 z-50 px-4 py-3 rounded-xl shadow-2xl text-xs font-bold flex items-center gap-2 transition animate-bounce ${
+          toast.isError ? 'bg-red-600 text-white' : 'bg-green-700 text-white'
+        }`}>
+          {toast.isError ? <AlertTriangle className="w-4 h-4" /> : <CheckCircle2 className="w-4 h-4" />}
+          <span>{toast.text}</span>
         </div>
       )}
 
@@ -304,7 +345,7 @@ export default function HomePage() {
               <button
                 onClick={loadAllData}
                 disabled={isLoading}
-                title="Refresh from Supabase"
+                title="Force Refresh from Supabase"
                 className="p-1 rounded hover:bg-gray-100 text-gray-500 transition"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin text-green-600' : ''}`} />
@@ -424,7 +465,7 @@ export default function HomePage() {
                 {filteredRows.length === 0 ? (
                   <tr>
                     <td colSpan={9} className="py-12 text-center text-gray-400">
-                      {hasSupabase ? 'No items in database. Click "+ Add Item" above to create an item.' : 'Please connect Supabase to view and manage stock.'}
+                      {hasSupabase ? 'No items found. Click "+ Add Item" above to add your first item.' : 'Please connect Supabase to load live stock.'}
                     </td>
                   </tr>
                 ) : (
@@ -458,7 +499,7 @@ export default function HomePage() {
                         <div className="flex items-center justify-center gap-1">
                           {/* Quick + Purchase */}
                           <button
-                            onClick={() => handleQuickInline(r.itemId, 'PURCHASE')}
+                            onClick={() => handleOpenQuickAdjust(r.itemId, 'PURCHASE')}
                             title="Add Purchase (+)"
                             className="w-6 h-6 rounded bg-green-50 hover:bg-green-100 text-green-700 flex items-center justify-center font-bold border border-green-200"
                           >
@@ -467,7 +508,7 @@ export default function HomePage() {
 
                           {/* Quick - Sale */}
                           <button
-                            onClick={() => handleQuickInline(r.itemId, 'SALE')}
+                            onClick={() => handleOpenQuickAdjust(r.itemId, 'SALE')}
                             title="Deduct Sale (-)"
                             className="w-6 h-6 rounded bg-red-50 hover:bg-red-100 text-red-600 flex items-center justify-center font-bold border border-red-200"
                           >
@@ -530,6 +571,20 @@ export default function HomePage() {
         </div>
 
       </main>
+
+      {/* Quick Adjust Touch Modal (Replaces window.prompt) */}
+      <QuickAdjustModal
+        isOpen={!!quickAdjustItem}
+        onClose={() => setQuickAdjustItem(null)}
+        item={quickAdjustItem}
+        type={quickAdjustType}
+        currentStock={
+          quickAdjustItem
+            ? stockRows.find((r) => r.itemId === quickAdjustItem.id)?.closingStock ?? quickAdjustItem.openingStock
+            : 0
+        }
+        onConfirm={handleConfirmQuickAdjust}
+      />
 
       {/* Bulk Entry Modal */}
       <BulkEntryModal

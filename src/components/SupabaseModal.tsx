@@ -17,7 +17,8 @@ import {
   SUPABASE_SQL_SETUP,
   fetchSupabaseItems,
   saveItemToSupabase,
-  saveTransactionsToSupabase
+  saveTransactionsToSupabase,
+  testSupabaseConnection
 } from '@/lib/supabase';
 import { Item, Transaction } from '@/types/stock';
 
@@ -62,16 +63,16 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({
     }
 
     saveSupabaseConfig({ url: url.trim(), anonKey: anonKey.trim() });
-    setStatus('Testing connection...');
+    setStatus('Testing database connection & permissions...');
     setIsError(false);
 
-    const test = await fetchSupabaseItems();
-    if (!test.error) {
-      setStatus(`Connected successfully to Supabase! Loaded ${test.items.length} items.`);
+    const test = await testSupabaseConnection();
+    if (test.ok) {
+      setStatus(`✓ ${test.message}`);
       setIsError(false);
       onSynced();
     } else {
-      setStatus(`Could not connect: ${test.error}. Please verify the URL/Key or run the SQL query below.`);
+      setStatus(`⚠️ ${test.message}`);
       setIsError(true);
     }
   };
